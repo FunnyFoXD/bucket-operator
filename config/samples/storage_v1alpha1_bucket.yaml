@@ -1,0 +1,6 @@
+apiVersion: storage.mydomain.com/v1alpha1
+kind: Bucket
+metadata:
+  name: bucket-sample
+spec:
+  size: 15
