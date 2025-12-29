@@ -18,8 +18,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -58,7 +61,6 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if !errors.IsNotFound(err) {
 			log.Error(err, "unable to fetch Bucket")
 		}
-
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -75,7 +77,6 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 			if err := r.Update(ctx, &bucket); err != nil {
 				log.Error(err, "couldn't remove finalizer")
-
 				return ctrl.Result{}, err
 			}
 			log.Info("Finilizer is removed")
@@ -87,11 +88,38 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 			if err := r.Update(ctx, &bucket); err != nil {
 				log.Error(err, "couldn't add finalizer")
-
 				return ctrl.Result{}, err
 			}
 			log.Info("Finalizer is added")
 		}
+	}
+
+	// Initial ConfigMap
+	log.Info("Creating ConfigMap...")
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bucket.Name + "-config",
+			Namespace: bucket.Namespace,
+		},
+	}
+
+	// Creating or updating bucket ConfigMap
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		cm.Labels = map[string]string{
+			"app":         "bucket-operator",
+			"bucket-name": bucket.Name,
+		}
+		cm.Data = map[string]string{
+			"size":  fmt.Sprintf("%d", bucket.Spec.Size),
+			"phase": bucket.Status.Phase,
+			"owner": bucket.Name,
+		}
+
+		return ctrl.SetControllerReference(&bucket, cm, r.Scheme)
+	})
+	if err != nil {
+		log.Error(err, "unable to create/update ConfigMap")
+		return ctrl.Result{}, err
 	}
 
 	// Change status
@@ -100,7 +128,6 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.Status().Update(ctx, &bucket); err != nil {
 			if errors.IsConflict(err) {
 				log.Info("Status conflict - retrying", "error", err)
-
 				return ctrl.Result{Requeue: true}, err
 			}
 			log.Error(err, "unable to update status")
