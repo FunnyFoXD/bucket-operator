@@ -35,15 +35,18 @@ type BucketSpec struct {
 
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=255
+	// +optional
 	Name string `json:"name,omitempty"`
 
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=255
+	// +optional
 	Region string `json:"region,omitempty"`
 
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=255
 	// +kubebuilder:validation:Enum=standard;reduced-redundancy;glacier
+	// +optional
 	StorageType string `json:"storageType,omitempty"`
 }
 
@@ -68,8 +71,6 @@ type BucketStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	Phase string `json:"phase,omitempty"`
 }
 
 // +kubebuilder:object:root=true
