@@ -1,8 +1,23 @@
 # bucket-operator
-// TODO(user): Add simple overview of use/purpose
+A Kubernetes operator for managing bucket resources. This operator creates and manages ConfigMaps based on Bucket CR, providing a simple way to manage storage bucket configurations in your Kubernetes cluster
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+The bucket-operator is a Kubernetes operator built with Kubebuilder that manages `Bucket` CR. When you create a Bucket resource, the operator:
+
+- **Creates ConfigMaps**: Automatically creates a ConfigMap containg bucket configuration (size, name, region, storageType)
+- **Manages Lifecycle**: Uses finalizers to ensure proper cleanup when buckets are deleted
+- **Tracks Status**: Uses Kubernetes Conditions (Ready, Available, Progressing) to track the state of bucket resources
+- **Validates Configuration**: Enforces validation rules on bucket specifications (size, name, region, storageType)
+
+This operator serves as a learning project for understanding Kubernetes operators, controllers, finalizers, and webhooks. It demonstrates best practices for resource reconciliation, status management, and cleanup operations.
+
+## Features
+
+- Custom Resource Definition (CRD) for Bucket resources
+- Automatic ConfigMap creation and synchronization
+- Finalizer-based cleanup on resource deletion
+- Status tracking with Kubernetes Conditions
+- Validation of bucket specifications
 
 ## Getting Started
 
@@ -111,7 +126,7 @@ previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml
 is manually re-applied afterwards.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+Nothing, because of learning project (base things)
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
 
