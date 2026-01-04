@@ -29,7 +29,22 @@ type BucketSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+
+	// +kubebuilder:validation:Minimum=1
 	Size int `json:"size,omitempty"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	Name string `json:"name,omitempty"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	Region string `json:"region,omitempty"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:Enum=standard;reduced-redundancy;glacier
+	StorageType string `json:"storageType,omitempty"`
 }
 
 // BucketStatus defines the observed state of Bucket.

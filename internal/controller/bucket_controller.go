@@ -73,6 +73,26 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		log.Info("Bucket deletion in progress...")
 		if controllerutil.ContainsFinalizer(&bucket, finalizer) {
 			log.Info("Removing finalizer...")
+
+			// TODO: Add logic for cleanup
+			// Delete ConfigMap that we created
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: bucket.Name + "-config",
+					Namespace: bucket.Namespace,
+				},
+			}
+			
+			if err := r.Delete(ctx, cm); err != nil {
+				if !errors.IsNotFound(err) {
+					log.Error(err, "unable to delete ConfigMap")
+					return ctrl.Result{}, err
+				}
+				log.Info("ConfigMap already deleted")
+			} else {
+				log.Info("ConfigMap deleted succesfully")
+			}
+
 			controllerutil.RemoveFinalizer(&bucket, finalizer)
 
 			if err := r.Update(ctx, &bucket); err != nil {
@@ -81,6 +101,7 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			log.Info("Finilizer is removed")
 		}
+		return ctrl.Result{}, nil
 	} else {
 		if !controllerutil.ContainsFinalizer(&bucket, finalizer) {
 			log.Info("Adding finalizer...")
