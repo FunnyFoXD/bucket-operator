@@ -4,3 +4,6 @@ metadata:
   name: bucket-sample
 spec:
   size: 15
+  name: "test-bucket"
+  region: "us-east-1"
+  storageType: "standard"
