@@ -144,8 +144,11 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.setConditionsOnError(&bucket, err)
 
 		// Try to update status
-		if updateErr := r.Status().Update(ctx, &bucket); updateErr != nil {
-			log.Error(updateErr, "unable to update status after error")
+		if updateErr := r.updateStatus(ctx, &bucket, log); updateErr != nil {
+			log.V(1).Info("unable to update status after error, but main error will be returned",
+				"statusError", updateErr,
+				"mainError", err,
+			)
 		}
 
 		// If temporary error, retry
@@ -155,17 +158,16 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Set condition on success
 	r.setConditionsOnSuccess(&bucket)
 
-	// Reset count with success
+	// Update status
+	if err := r.updateStatus(ctx, &bucket, log); err != nil {
+		return r.handleErrorWithRetry(ctx, &bucket, err, log)
+	}
+
 	r.resetRetryCount(&bucket)
 	if err := r.Update(ctx, &bucket); err != nil {
 		log.V(1).Info("unable to reset retry count, but it's not critical",
 			"error", err,
 		)
-	}
-
-	// Update status
-	if err := r.updateStatus(ctx, &bucket, log); err != nil {
-		return r.handleErrorWithRetry(ctx, &bucket, err, log)
 	}
 
 	log.Info("Reconciliation completed successfully")
@@ -348,13 +350,17 @@ func (r *BucketReconciler) setConditionsOnSuccess(bucket *storagev1alpha1.Bucket
 	r.setReadyCondition(bucket, metav1.ConditionTrue, reasonConfigMapCreated,
 		"ConfigMap successfully created")
 	r.setProgressingCondition(bucket, metav1.ConditionFalse, reasonBucketAvailable,
-		"Bucket is available and ready")
-	r.setAvailableCondition(bucket, metav1.ConditionTrue, reasonReconcileComplete,
 		"Reconciliation completed successfully")
+	r.setAvailableCondition(bucket, metav1.ConditionTrue, reasonReconcileComplete,
+		"Bucket is available and ready")
 }
 
 // setProgressingCondition set progressing condition on true/false
 func (r *BucketReconciler) setProgressingCondition(bucket *storagev1alpha1.Bucket, status metav1.ConditionStatus, reason, message string) {
+	if bucket.Status.Conditions == nil {
+		bucket.Status.Conditions = make([]metav1.Condition, 0)
+	}
+
 	meta.SetStatusCondition(&bucket.Status.Conditions, metav1.Condition{
 		Type:    conditionTypeProgressing,
 		Status:  status,
@@ -365,6 +371,10 @@ func (r *BucketReconciler) setProgressingCondition(bucket *storagev1alpha1.Bucke
 
 // setReadyCondition set ready condition on true/false
 func (r *BucketReconciler) setReadyCondition(bucket *storagev1alpha1.Bucket, status metav1.ConditionStatus, reason, message string) {
+	if bucket.Status.Conditions == nil {
+		bucket.Status.Conditions = make([]metav1.Condition, 0)
+	}
+
 	meta.SetStatusCondition(&bucket.Status.Conditions, metav1.Condition{
 		Type:    conditionTypeReady,
 		Status:  status,
@@ -375,6 +385,10 @@ func (r *BucketReconciler) setReadyCondition(bucket *storagev1alpha1.Bucket, sta
 
 // setAvailableCondition set available condition on true/false
 func (r *BucketReconciler) setAvailableCondition(bucket *storagev1alpha1.Bucket, status metav1.ConditionStatus, reason, message string) {
+	if bucket.Status.Conditions == nil {
+		bucket.Status.Conditions = make([]metav1.Condition, 0)
+	}
+
 	meta.SetStatusCondition(&bucket.Status.Conditions, metav1.Condition{
 		Type:    conditionTypeAvailable,
 		Status:  status,
