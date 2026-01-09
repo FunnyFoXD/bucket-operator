@@ -58,10 +58,11 @@ const (
 	reasonReconcileComplete       = "ReconcileComplete"
 	reasonReconcileFailed         = "ReconcileFailed"
 
-	// Retry delays
-	retryDelayShort  = time.Second * 2  // status conflicts
-	retryDelayMedium = time.Second * 5  // temporary errors
-	retryDelayLong   = time.Second * 10 // rate limiting
+	// Retry configurations
+	retryAnnotationKey = "bucket.storage.mydomain.com/retry-count"
+	maxRetryAttempt    = 5
+	baseRetryDelay     = time.Second * 2
+	maxRetryDelay      = time.Minute
 )
 
 // TemporaryError represents temporary error, that can be fixed with retry
@@ -134,15 +135,7 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Ensure, that finalizer is added
 	if err := r.ensureFinalizer(ctx, &bucket, log); err != nil {
-		if tempErr, ok := err.(*TemporaryError); ok {
-			log.Info("Temporary error adding finalizer, will retry",
-				"error", tempErr.Err,
-			)
-			return ctrl.Result{RequeueAfter: retryDelayMedium}, nil
-		}
-
-		log.Error(err, "permanent error adding finalizer")
-		return ctrl.Result{}, err
+		return r.handleErrorWithRetry(ctx, &bucket, err, log)
 	}
 
 	// Create/Update ConfigMaps
@@ -156,28 +149,23 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 
 		// If temporary error, retry
-		if tempErr, ok := err.(*TemporaryError); ok {
-			log.Info("Temporary error, will retry",
-				"error", tempErr.Err,
-			)
-			return ctrl.Result{RequeueAfter: retryDelayMedium}, nil
-		}
-
-		return ctrl.Result{}, err
+		return r.handleErrorWithRetry(ctx, &bucket, err, log)
 	}
 
 	// Set condition on success
 	r.setConditionsOnSuccess(&bucket)
 
+	// Reset count with success
+	r.resetRetryCount(&bucket)
+	if err := r.Update(ctx, &bucket); err != nil {
+		log.V(1).Info("unable to reset retry count, but it's not critical",
+			"error", err,
+		)
+	}
+
 	// Update status
 	if err := r.updateStatus(ctx, &bucket, log); err != nil {
-		if tempErr, ok := err.(*TemporaryError); ok {
-			log.Info("Temporary error updating status, will retry",
-				"error", tempErr.Err,
-			)
-			return ctrl.Result{RequeueAfter: retryDelayShort}, nil
-		}
-		return ctrl.Result{}, err
+		return r.handleErrorWithRetry(ctx, &bucket, err, log)
 	}
 
 	log.Info("Reconciliation completed successfully")
@@ -214,16 +202,8 @@ func (r *BucketReconciler) handleDeletion(ctx context.Context, bucket *storagev1
 				"configmap", cmName,
 				"namespace", bucket.Namespace)
 
-			if r.isTemporaryError(err) {
-				log.Info("Temporary error deleting ConfigMap, will retry",
-					"error", err,
-				)
-				return ctrl.Result{RequeueAfter: retryDelayMedium}, nil
-			}
-
-			return ctrl.Result{}, err
+			return r.handleErrorWithRetry(ctx, bucket, err, log)
 		}
-
 		log.Info("ConfigMap already deleted",
 			"configmap", cmName,
 		)
@@ -241,11 +221,7 @@ func (r *BucketReconciler) handleDeletion(ctx context.Context, bucket *storagev1
 			"finalizer", finalizer,
 		)
 
-		if r.isTemporaryError(err) {
-			return ctrl.Result{RequeueAfter: retryDelayShort}, nil
-		}
-
-		return ctrl.Result{}, err
+		return r.handleErrorWithRetry(ctx, bucket, err, log)
 	}
 
 	log.Info("Bucket is deleted successfully")
@@ -350,7 +326,6 @@ func (r *BucketReconciler) buildConfigMapData(bucket *storagev1alpha1.Bucket) ma
 
 // setConditionsOnError set all condition types for error
 func (r *BucketReconciler) setConditionsOnError(bucket *storagev1alpha1.Bucket, err error) {
-	// Ready type
 	if r.isTemporaryError(err) {
 		r.setReadyCondition(bucket, metav1.ConditionFalse, reasonConfigMapCreationFailed,
 			fmt.Sprintf("Temporary error creating ConfigMap: %v. Will retry", err))
@@ -465,6 +440,94 @@ func (r *BucketReconciler) isTemporaryError(err error) bool {
 	}
 
 	return false
+}
+
+// handleErrorWithRetry handles error using retry logic
+func (r *BucketReconciler) handleErrorWithRetry(ctx context.Context, bucket *storagev1alpha1.Bucket, err error, log logr.Logger) (ctrl.Result, error) {
+	if !r.isTemporaryError(err) {
+		r.resetRetryCount(bucket)
+		return ctrl.Result{}, err
+	}
+
+	retryCount := r.getRetryCount(bucket)
+
+	if retryCount >= maxRetryAttempt {
+		log.Error(err, "max retry attempts reached",
+			"retryCount", retryCount,
+			"maxAttempts", maxRetryAttempt,
+		)
+		r.resetRetryCount(bucket)
+		r.setConditionsOnError(bucket, fmt.Errorf("max retry attempts (%d) reached: %v", maxRetryAttempt, err))
+		_ = r.Status().Update(ctx, bucket)
+
+		return ctrl.Result{}, fmt.Errorf("max retry attempts reached: %w", err)
+	}
+
+	retryCount++
+	r.setRetryCount(bucket, retryCount)
+
+	delay := r.calculateRetryDelay(retryCount)
+
+	log.Info("Temporary error detected, will retry",
+		"error", err,
+		"retryCount", retryCount,
+		"maxAttempts", maxRetryAttempt,
+		"retryAfter", delay,
+	)
+
+	if updateErr := r.Update(ctx, bucket); updateErr != nil {
+		log.Error(updateErr, "unable to update retry count")
+	}
+
+	return ctrl.Result{RequeueAfter: delay}, nil
+}
+
+// getRetryCount gets number of tries from annotations
+func (r *BucketReconciler) getRetryCount(bucket *storagev1alpha1.Bucket) int {
+	if bucket.Annotations == nil {
+		return 0
+	}
+
+	countStr, exists := bucket.Annotations[retryAnnotationKey]
+	if !exists {
+		return 0
+	}
+
+	var count int
+	if _, err := fmt.Sscanf(countStr, "%d", &count); err != nil {
+		return 0
+	}
+
+	return count
+}
+
+// setRetryCount set number of tries in the annotations
+func (r *BucketReconciler) setRetryCount(bucket *storagev1alpha1.Bucket, count int) {
+	if bucket.Annotations == nil {
+		bucket.Annotations = make(map[string]string)
+	}
+
+	bucket.Annotations[retryAnnotationKey] = fmt.Sprintf("%d", count)
+}
+
+// resetRetryCount resets retries count
+func (r *BucketReconciler) resetRetryCount(bucket *storagev1alpha1.Bucket) {
+	if bucket.Annotations == nil {
+		return
+	}
+
+	delete(bucket.Annotations, retryAnnotationKey)
+}
+
+// calculateRetryDelay calculate delay using exp backoff
+func (r *BucketReconciler) calculateRetryDelay(attemptCount int) time.Duration {
+	delay := baseRetryDelay * time.Duration(1<<uint(attemptCount))
+
+	if delay > maxRetryDelay {
+		delay = maxRetryDelay
+	}
+
+	return delay
 }
 
 // SetupWithManager sets up the controller with the Manager.
